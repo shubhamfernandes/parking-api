@@ -23,7 +23,8 @@ class QuoteAvailabilityRequest extends FormRequest
     {
 
         $today = now()->startOfDay();
-        $limit = $today->clone()->addYear()->endOfDay()->toDateTimeString();
+        $horizonDays = (int) config('booking.quote_horizon_days', 365);
+        $limit = $today->clone()->addDays($horizonDays)->endOfDay()->toDateTimeString();
 
         return [
             'from_date'   => ['required', 'date', 'after_or_equal:' . $today->toDateString()],

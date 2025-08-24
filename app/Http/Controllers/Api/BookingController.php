@@ -40,7 +40,11 @@ public function destroy(Booking $booking, BookingServiceInterface $service)
 {
     $service->cancel($booking);
 
-    return response()->json(['message' => 'Booking cancelled', 'reference' => $booking->reference]);
+     return BookingResource::make($booking->refresh())
+        ->additional([
+            'message'   => 'Booking cancelled',
+            'reference' => $booking->reference,
+        ]);
 }
 
 }

@@ -3,9 +3,10 @@
 namespace App\Domain\Services;
 
 use App\Domain\ValueObjects\DateRange;
+use App\Contracts\PricingServiceInterface;
 use Brick\Money\Money;
 use Carbon\CarbonImmutable;
-use App\Contracts\PricingServiceInterface;
+
 class PricingService implements PricingServiceInterface
 {
     public function __construct(
@@ -13,6 +14,8 @@ class PricingService implements PricingServiceInterface
         public readonly array $rates,
         public readonly array $summerMonths,
         public readonly array $winterMonths,
+        public readonly string $defaultSeason = 'winter', // used for shoulder months
+        public readonly array $weekendDays = [0, 6],      // 0=Sun, 6=Sat (Carbon dayOfWeek)
     ) {}
 
     public function quote(DateRange $range): array
@@ -21,25 +24,24 @@ class PricingService implements PricingServiceInterface
         $totalMinor = 0;
 
         foreach ($range->eachOccupiedDay() as $dateStr) {
-            $d = CarbonImmutable::parse($dateStr);
-            $isWeekend = (int) $d->isWeekend(); // 1 or 0
-            $season = $this->seasonForMonth((int) $d->month);
+            $d       = CarbonImmutable::parse($dateStr);
+            $season  = $this->seasonForMonth((int) $d->month);
+            $dayType = $this->isConfiguredWeekend($d) ? 'weekend' : 'weekday';
 
-            $key = $isWeekend ? 'weekend' : 'weekday';
-            $minor = $this->rates[$season][$key];
+            $minor = $this->rates[$season][$dayType];
 
             $items[] = [
-                'date' => $dateStr,
-                'season' => $season,
-                'day_type' => $key,
+                'date'         => $dateStr,
+                'season'       => $season,
+                'day_type'     => $dayType,
                 'amount_minor' => $minor,
             ];
             $totalMinor += $minor;
         }
 
         return [
-            'currency' => $this->currency,
-            'total' => Money::ofMinor($totalMinor, $this->currency),
+            'currency'  => $this->currency,
+            'total'     => Money::ofMinor($totalMinor, $this->currency),
             'breakdown' => $items,
         ];
     }
@@ -48,7 +50,12 @@ class PricingService implements PricingServiceInterface
     {
         if (in_array($m, $this->summerMonths, true)) return 'summer';
         if (in_array($m, $this->winterMonths, true)) return 'winter';
-        // choose a default; here map to closest band (winter by default)
-        return 'winter';
+        return $this->defaultSeason; // configurable fallback for shoulder months
+    }
+
+    private function isConfiguredWeekend(CarbonImmutable $d): bool
+    {
+        // Carbon: 0=Sun ... 6=Sat
+        return in_array((int) $d->dayOfWeek, $this->weekendDays, true);
     }
 }

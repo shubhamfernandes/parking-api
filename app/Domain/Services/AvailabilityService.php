@@ -11,6 +11,7 @@ use App\Models\Capacity;
 use Illuminate\Support\Collection;
 use Carbon\CarbonInterface;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
+use Illuminate\Support\Facades\DB;
 
 class AvailabilityService implements AvailabilityServiceInterface
 {
@@ -71,12 +72,13 @@ class AvailabilityService implements AvailabilityServiceInterface
             $cap = Capacity::whereKey($cap->getKey())->lockForUpdate()->first();
 
             // Lock matching booking_days while counting
-            $booked = BookingDay::query()
+             $booked = BookingDay::query()
+                ->join('bookings', 'bookings.id', '=', 'booking_days.booking_id')
                 ->where('booking_days.day', $dateStr)
-                ->when($ignoreBookingId, fn($q) => $q->where('booking_id', '!=', $ignoreBookingId))
-                ->whereIn('booking_id', Booking::active()->select('id'))
+                ->where('bookings.status', BookingStatus::Active->value)
+                ->when($ignoreBookingId, fn ($q) => $q->where('booking_days.booking_id', '!=', $ignoreBookingId))
                 ->lockForUpdate()
-                ->count();
+                ->count(DB::raw('1'));
 
             if ($booked >= (int) $cap->capacity) {
                 throw new ConflictHttpException("No spaces available on {$dateStr}");

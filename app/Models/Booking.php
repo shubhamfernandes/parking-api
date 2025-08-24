@@ -49,7 +49,8 @@ class Booking extends Model
         });
 
             static::creating(function (self $b) {
-                $b->reference ??= 'BK-'.str()->upper(str()->ulid());
+                $prefix = config('booking.reference_prefix', 'BK-');
+                $b->reference ??= $prefix . str()->upper(str()->ulid());
                 $b->status ??= BookingStatus::Active;
             });
         }
@@ -99,9 +100,6 @@ class Booking extends Model
     public function scopeForReg(Builder $q, string $rawReg): Builder
     {
         $norm = Str::upper(preg_replace('/\s+/', '', $rawReg));
-        return $q->where(function ($q) use ($norm) {
-            $q->where('vehicle_reg_normalized', $norm)
-              ->orWhereRaw('REPLACE(UPPER(vehicle_reg), " ", "") = ?', [$norm]);
-        });
+        return $q->where('vehicle_reg_normalized', $norm);
     }
 }

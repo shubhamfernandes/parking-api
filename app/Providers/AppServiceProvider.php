@@ -31,6 +31,8 @@ class AppServiceProvider extends ServiceProvider
                 rates:        $cfg['rates'],
                 summerMonths: $cfg['summer_months'],
                 winterMonths: $cfg['winter_months'],
+                defaultSeason: config('booking.default_season', 'winter'),
+                weekendDays:   config('booking.weekend_days', [6,0]),
             );
         });
 

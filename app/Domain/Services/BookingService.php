@@ -38,8 +38,6 @@ class BookingService implements BookingServiceInterface
             throw new ConflictHttpException('This booking has already been submitted.');
         }
 
-        // 4) Business rule: same user + same car cannot have another Active booking
-        $emailNormalizedForSearch = strtolower(trim($dto['customer_email']));
 
         // duplicate-active check now matches stored forms
         $sameCarActiveExists = Booking::query()
@@ -65,7 +63,6 @@ class BookingService implements BookingServiceInterface
                     'customer_name'          => $dto['customer_name'],
                     'customer_email'         => $dto['customer_email'], // model still lowercases
                     'vehicle_reg'            => $dto['vehicle_reg'],    // display form
-                    // 'vehicle_reg_normalized' => $regNormalizedForSearch, //  persist normalized explicitly
                     'from_date'              => $range->fromDate,
                     'to_datetime'            => $range->toDateTime,
                     'status'                 => BookingStatus::Active,

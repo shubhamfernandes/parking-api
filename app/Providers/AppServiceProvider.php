@@ -1,0 +1,59 @@
+<?php
+
+namespace App\Providers;
+
+use App\Contracts\PricingServiceInterface;
+use App\Contracts\AvailabilityServiceInterface;
+use App\Contracts\BookingServiceInterface;
+use App\Domain\Services\AvailabilityService;
+use App\Domain\Services\BookingService;
+use App\Domain\Services\PricingService;
+use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    /**
+     * Register any application services.
+     */
+    public function register(): void
+    {
+        $this->app->singleton(PricingServiceInterface::class, static function () {
+            $cfg = config('pricing');
+
+            $currency = strtoupper((string) ($cfg['currency'] ?? 'GBP'));
+            if (!preg_match('/^[A-Z]{3}$/', $currency)) {
+                $currency = 'GBP';
+            }
+
+            return new PricingService(
+                currency:     $currency,
+                rates:        $cfg['rates'],
+                summerMonths: $cfg['summer_months'],
+                winterMonths: $cfg['winter_months'],
+            );
+        });
+
+        $this->app->singleton(AvailabilityServiceInterface::class, static function () {
+            $capacity = config('parking.capacity');
+            return new AvailabilityService(
+                defaultCapacity: $capacity ?? 10
+            );
+        });
+
+        $this->app->singleton(BookingServiceInterface::class, static function ($app) {
+        return new BookingService(
+            availability: $app->make(AvailabilityServiceInterface::class),
+            pricing:      $app->make(PricingServiceInterface::class),
+        );
+    });
+    }
+
+    /**
+     * Bootstrap any application services.
+     */
+    public function boot(): void
+    {
+         JsonResource::withoutWrapping();
+    }
+}

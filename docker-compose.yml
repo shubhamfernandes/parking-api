@@ -1,0 +1,50 @@
+
+services:
+  app:
+    build: .
+    container_name: laravel-api
+    working_dir: /var/www/html
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/var/www/html
+      - composer-cache:/tmp/composer-cache
+    environment:
+      COMPOSER_CACHE_DIR: /tmp/composer-cache
+      APP_ENV: local
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: laravel_parking_api
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      command: --default-authentication-plugin=mysql_native_password
+    ports:
+      - "3307:3307"
+    volumes:
+      - mysqldata:/var/lib/mysql
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+  # Optional: queue worker
+  queue:
+    build: .
+    container_name: laravel-queue
+    working_dir: /var/www/html
+    command: php artisan queue:work --verbose --tries=3 --timeout=90
+    volumes:
+      - ./:/var/www/html
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  composer-cache:
+  mysqldata:

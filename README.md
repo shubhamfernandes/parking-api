@@ -212,7 +212,7 @@ cp .env.example .env
 docker compose up -d --build
 
 # 3. Install dependencies FIRST
-docker compose run --rm app composer install --no-interaction
+docker compose run --rm app composer install 
 
 # 4. Generate key
 docker compose run --rm app php artisan key:generate

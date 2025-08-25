@@ -145,7 +145,7 @@ A small, production-quality REST API for an airport parking service. It exposes 
 ## HTTP API
 
 All routes are prefixed with `/api/v1`.
-
+(http://127.0.0.1:8000/api/v1/)
 ### GET `/availability`
 Query: `from_date=YYYY-MM-DD`, `to_datetime=YYYY-MM-DDTHH:MM:SS`  
 Returns per-day capacity & counts.

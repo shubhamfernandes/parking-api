@@ -7,9 +7,13 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 class BookingResource extends JsonResource
 {
+    /**
+     * @return array<string, mixed>
+     */
     public function toArray(Request $request): array
     {
-        $money = $this->total; // accessor returns Brick\Money\Money
+        // Accessor returns Brick\Money\Money
+        $money = $this->total;
 
         return [
             'id'             => (string) $this->id,
@@ -31,9 +35,9 @@ class BookingResource extends JsonResource
             'created_at'     => $this->created_at?->toIso8601String(),
             'updated_at'     => $this->updated_at?->toIso8601String(),
 
-            'days' => $this->whenLoaded('days', fn () =>
-                $this->days->map(fn ($d) => $d->day->toDateString())
-            ),
+            'days' => $this->whenLoaded('days', fn () => $this->days->map(
+                fn ($d) => $d->day->toDateString()
+            )),
         ];
     }
 }

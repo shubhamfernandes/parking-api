@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
-        Schema::create('booking_days', function (Blueprint $table) {
+        Schema::create('booking_days', function (Blueprint $table): void {
             $table->id();
 
             $table->ulid('booking_id')->index();
@@ -21,7 +21,8 @@ return new class extends Migration {
 
             // FK
             $table->foreign('booking_id')
-                ->references('id')->on('bookings')
+                ->references('id')
+                ->on('bookings')
                 ->cascadeOnDelete();
         });
     }

@@ -7,50 +7,37 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
-        Schema::create('bookings', function (Blueprint $table) {
+        Schema::create('bookings', function (Blueprint $table): void {
             $table->ulid('id')->primary();
 
-            $table->string('reference')->unique();
-
+            $table->string('reference')->unique(); // BK-<ULID>
             $table->string('customer_name');
-            $table->string('customer_email')->index('idx_bookings_email');
+            $table->string('customer_email')->index();
 
-            $table->string('vehicle_reg', 20);
+            $table->string('vehicle_reg'); // raw reg
+            // Stored generated column (UPPER + strip spaces) used for fast lookups
+            $table->string('vehicle_reg_normalized')->storedAs("UPPER(REPLACE(vehicle_reg, ' ', ''))");
+            $table->index('vehicle_reg_normalized', 'bookings_reg_norm_idx');
 
-            // Normalized reg (UPPER, no spaces) for fast lookups
-            $table->string('vehicle_reg_normalized', 20)
-                    ->storedAs("UPPER(REPLACE(vehicle_reg, ' ', ''))"); // generated column
-            $table->index('vehicle_reg_normalized', 'idx_bookings_reg_norm');
+            // Note: tests may pass 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SS'
+            $table->dateTime('from_date');   // start-of-day is enforced by code
+            $table->dateTime('to_datetime'); // checkout moment (exclusive)
 
-            // Dates
-            $table->date('from_date');        // drop-off date (00:00)
-            $table->dateTime('to_datetime');  // pick-up date+time
+            $table->unsignedBigInteger('total_minor')->default(0);
+            $table->string('currency', 3)->default('GBP');
 
-            // Money
-            $table->unsignedBigInteger('total_minor')->default(0); // pence
-            $table->char('currency', 3)
-                ->default(config('pricing.currency', env('PRICING_CURRENCY', 'GBP')));
+            // Idempotency (nullable so you can rebook after cancel)
+            $table->string('request_fingerprint', 64)
+                ->nullable()
+                ->unique('uniq_bookings_request_fingerprint');
 
-            // Status / versioning
-            $table->string('status', 20)->index(); // active, cancelled
+            $table->enum('status', ['active', 'cancelled'])->default('active');
             $table->unsignedInteger('version')->default(1);
 
-            // Idempotency
-            $table->string('request_fingerprint', 64)->nullable()->unique();
-
-            // Guard exact duplicate ACTIVE bookings by same name+from+to+status
-            $table->unique(
-                ['customer_name', 'vehicle_reg', 'from_date', 'to_datetime', 'status'],
-                'uniq_active_booking_guard'
-            );
-
-            // Composite index to power duplicate-active check quickly
-            $table->index(
-                ['customer_email', 'vehicle_reg_normalized', 'status'],
-                'idx_bookings_email_reg_status'
-            );
-
             $table->timestamps();
+
+            // Overlap & duplicate guards
+            $table->index(['from_date', 'to_datetime', 'status']);
         });
     }
 

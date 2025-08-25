@@ -14,7 +14,6 @@ class AvailabilityResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
-
         return [
             'range'               => $this->resource['range'],
             'all_days_have_space' => (bool) $this->resource['all_days_have_space'],

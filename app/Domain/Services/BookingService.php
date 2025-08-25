@@ -2,10 +2,10 @@
 
 namespace App\Domain\Services;
 
-use App\Domain\ValueObjects\DateRange;
-use App\Contracts\PricingServiceInterface;
 use App\Contracts\AvailabilityServiceInterface;
 use App\Contracts\BookingServiceInterface;
+use App\Contracts\PricingServiceInterface;
+use App\Domain\ValueObjects\DateRange;
 use App\Enums\BookingStatus;
 use App\Models\Booking;
 use App\Models\BookingDay;
@@ -24,58 +24,65 @@ class BookingService implements BookingServiceInterface
 
     public function create(array $dto): Booking
     {
-        // 1) Normalize dates
+        // 1) Normalize request window
         $range = $this->buildRange($dto);
 
-        // 2) The Model will handle email normalization. Calculate normalized reg for query.
-        $email = $dto['customer_email'];
-        $regNormalizedForSearch = $this->normalizeReg($dto['vehicle_reg']); // This becomes "ABC123"
+        // 2) Idempotency fingerprint (email + normalized reg + exact window)
+        $fingerprint = $this->fingerprint(
+            $dto['customer_email'],
+            $this->normalizeReg($dto['vehicle_reg']),
+            $range
+        );
 
-        // 3) Idempotency fingerprint (same user+car+from+to)
-        $fingerprint = $this->fingerprint($email, $regNormalizedForSearch, $range);
-
-        if (Booking::query()->where('request_fingerprint', $fingerprint)->exists()) {
-            throw new ConflictHttpException('This booking has already been submitted.');
+        // 3) Idempotency pre-check (avoid work if same payload already active)
+        if ($existing = Booking::query()->where('request_fingerprint', $fingerprint)->first()) {
+            if ($existing->status === BookingStatus::Active) {
+                throw new ConflictHttpException('This booking has already been submitted.');
+            }
+            // cancelled → allow same payload again
         }
 
-
-        // duplicate-active check now matches stored forms
-        $sameCarActiveExists = Booking::query()
-            ->active()
-            ->forEmail($dto['customer_email'])
-            ->forReg($dto['vehicle_reg'])
-            ->exists();
-
-        if ($sameCarActiveExists) {
+        // 4) Duplicate rule (vehicle-only, overlap-aware)
+        if (
+            Booking::query()
+                ->activeOverlappingVehicle($dto['vehicle_reg'], $range->fromDate, $range->toDateTime)
+                ->exists()
+        ) {
             throw new ConflictHttpException(
-                'You already have an active booking for this vehicle. Choose a different vehicle or cancel the existing one.'
+                'This vehicle already has an active booking that overlaps with these dates. ' .
+                'Choose a different vehicle or cancel the existing one.'
             );
         }
 
         // 5) Create atomically
         try {
-            return DB::transaction(function () use ($dto, $range, $fingerprint,$regNormalizedForSearch) {
+            $booking = DB::transaction(function () use ($dto, $range, $fingerprint) {
                 $this->availability->assertRangeHasSpace($range);
+
                 $quote = $this->pricing->quote($range);
 
-                // The model mutator will handle normalization of email and vehicle_reg
-                  $booking = Booking::create([
-                    'customer_name'          => $dto['customer_name'],
-                    'customer_email'         => $dto['customer_email'], // model still lowercases
-                    'vehicle_reg'            => $dto['vehicle_reg'],    // display form
-                    'from_date'              => $range->fromDate,
-                    'to_datetime'            => $range->toDateTime,
-                    'status'                 => BookingStatus::Active,
-                    'total_minor'            => $quote['total']->getMinorAmount()->toInt(),
-                    'currency'               => $quote['currency'],
-                    'request_fingerprint'    => $fingerprint,
-    ]);
+                $booking = Booking::create([
+                    'customer_name'       => $dto['customer_name'],
+                    'customer_email'      => $dto['customer_email'],
+                    'vehicle_reg'         => $dto['vehicle_reg'],
+                    'from_date'           => $range->fromDate,
+                    'to_datetime'         => $range->toDateTime,
+                    'status'              => BookingStatus::Active,
+                    'total_minor'         => $quote['total']->getMinorAmount()->toInt(),
+                    'currency'            => $quote['currency'],
+                    'request_fingerprint' => $fingerprint,
+                ]);
 
                 $this->syncDays($booking, $range);
-                return $booking->refresh();
+
+                return $booking;
             });
+
+            // Return a definitely fresh instance
+            return $booking->fresh();
         } catch (QueryException $e) {
-            if (Str::contains($e->getMessage(), 'request_fingerprint')) {
+            // MySQL duplicate key
+            if (($e->errorInfo[1] ?? null) == 1062) {
                 throw new ConflictHttpException('This booking has already been submitted.');
             }
             throw $e;
@@ -85,36 +92,55 @@ class BookingService implements BookingServiceInterface
     public function amend(Booking $booking, array $dto): Booking
     {
         return DB::transaction(function () use ($booking, $dto) {
+            // support changing the vehicle too (optional)
+            $targetReg = $dto['vehicle_reg'] ?? $booking->vehicle_reg;
+
+            // build the new window
             $range = $this->buildRange($dto);
 
-            // capacity, ignoring current booking
+            // capacity check, ignoring the current booking’s rows
             $this->availability->assertRangeHasSpace($range, $booking->id);
+
+            // prevent overlap with ANY other active booking for the same vehicle (email ignored)
+            $overlapWithOther = Booking::query()
+                ->activeOverlappingVehicle($targetReg, $range->fromDate, $range->toDateTime)
+                ->whereKeyNot($booking->id)
+                ->exists();
+
+            if ($overlapWithOther) {
+                throw new ConflictHttpException('This amendment would overlap another booking for this vehicle.');
+            }
 
             // re-price
             $quote = $this->pricing->quote($range);
 
-            // We do not apply idempotency to amendments
+            // persist changes (including optional vehicle + contact changes)
             $booking->update([
-                'from_date'   => $range->fromDate,
-                'to_datetime' => $range->toDateTime,
-                'total_minor' => $quote['total']->getMinorAmount()->toInt(),
-                'currency'    => $quote['currency'],
-                'version'     => $booking->version + 1,
+                'customer_name'  => $dto['customer_name']  ?? $booking->customer_name,
+                'customer_email' => $dto['customer_email'] ?? $booking->customer_email,
+                'vehicle_reg'    => $targetReg,
+                'from_date'      => $range->fromDate,
+                'to_datetime'    => $range->toDateTime,
+                'total_minor'    => $quote['total']->getMinorAmount()->toInt(),
+                'currency'       => $quote['currency'],
+                'version'        => $booking->version + 1, // bump version on amend
             ]);
 
+            // resync per-day rows
             $this->syncDays($booking, $range);
 
-            return $booking->refresh();
+            // return a definitely fresh instance so your resource sees new values
+            return $booking->fresh();
         });
     }
 
     public function cancel(Booking $booking): void
     {
         if ($booking->status === BookingStatus::Cancelled) {
-        throw new ConflictHttpException('This booking is already cancelled.');
-    }
+            throw new ConflictHttpException('This booking is already cancelled.');
+        }
+
         DB::transaction(function () use ($booking) {
-            // Clear fingerprint so the *same* payload can be used later
             $booking->update([
                 'status'              => BookingStatus::Cancelled,
                 'request_fingerprint' => null,
@@ -134,8 +160,11 @@ class BookingService implements BookingServiceInterface
 
     private function normalizeReg(string $reg): string
     {
-        // Uppercase + strip spaces for consistent comparisons
-        return Str::upper(preg_replace('/\s+/', '', $reg));
+        // remove all whitespace, uppercase (keeps letters/numbers/symbols intact)
+        /** @var string $normalized */
+        $normalized = preg_replace('/\s+/', '', $reg) ?? $reg;
+
+        return Str::upper($normalized);
     }
 
     private function fingerprint(string $email, string $regNormalized, DateRange $range): string
@@ -158,7 +187,8 @@ class BookingService implements BookingServiceInterface
         foreach ($range->eachOccupiedDay() as $d) {
             $rows[] = ['booking_id' => $booking->id, 'day' => $d];
         }
-        if ($rows) {
+
+        if ($rows !== []) {
             BookingDay::insert($rows);
         }
     }

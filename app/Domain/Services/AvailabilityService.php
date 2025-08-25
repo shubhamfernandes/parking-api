@@ -2,16 +2,16 @@
 
 namespace App\Domain\Services;
 
-use App\Domain\ValueObjects\DateRange;
 use App\Contracts\AvailabilityServiceInterface;
+use App\Domain\ValueObjects\DateRange;
 use App\Enums\BookingStatus;
 use App\Models\Booking;
 use App\Models\BookingDay;
 use App\Models\Capacity;
-use Illuminate\Support\Collection;
 use Carbon\CarbonInterface;
-use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class AvailabilityService implements AvailabilityServiceInterface
 {
@@ -40,13 +40,13 @@ class AvailabilityService implements AvailabilityServiceInterface
             ->get()
             ->mapWithKeys(fn ($row) => [
                 ($row->d instanceof CarbonInterface ? $row->d->toDateString() : (string) $row->d)
-                    => (int) $row->booked
+                    => (int) $row->booked,
             ]);
 
         // 4) Build response with matching keys
         return $days->map(function (string $d) use ($caps, $counts) {
             $capacity = (int) ($caps->get($d)?->capacity ?? $this->defaultCapacity);
-            $booked   = (int) ($counts[$d] ?? 0);
+            $booked   = (int) $counts->get($d, 0);
 
             return [
                 'date'      => $d,
@@ -57,7 +57,6 @@ class AvailabilityService implements AvailabilityServiceInterface
         });
     }
 
-
     public function assertRangeHasSpace(DateRange $range, ?string $ignoreBookingId = null): void
     {
         // Normalize + deterministic order to reduce deadlocks
@@ -66,23 +65,25 @@ class AvailabilityService implements AvailabilityServiceInterface
             ->sort()
             ->values();
 
-        foreach ($days as $dateStr) {
-            // Ensure capacity row exists, then lock it
-            $cap = Capacity::firstOrCreate(['day' => $dateStr], ['capacity' => $this->defaultCapacity]);
-            $cap = Capacity::whereKey($cap->getKey())->lockForUpdate()->first();
+        DB::transaction(function () use ($days, $ignoreBookingId): void {
+            foreach ($days as $dateStr) {
+                // Ensure capacity row exists, then lock it
+                $cap = Capacity::firstOrCreate(['day' => $dateStr], ['capacity' => $this->defaultCapacity]);
+                $cap = Capacity::whereKey($cap->getKey())->lockForUpdate()->first();
 
-            // Lock matching booking_days while counting
-             $booked = BookingDay::query()
-                ->join('bookings', 'bookings.id', '=', 'booking_days.booking_id')
-                ->where('booking_days.day', $dateStr)
-                ->where('bookings.status', BookingStatus::Active->value)
-                ->when($ignoreBookingId, fn ($q) => $q->where('booking_days.booking_id', '!=', $ignoreBookingId))
-                ->lockForUpdate()
-                ->count(DB::raw('1'));
+                // Lock matching booking_days while counting
+                $booked = BookingDay::query()
+                    ->join('bookings', 'bookings.id', '=', 'booking_days.booking_id')
+                    ->where('booking_days.day', $dateStr)
+                    ->where('bookings.status', BookingStatus::Active->value)
+                    ->when($ignoreBookingId, fn ($q) => $q->where('booking_days.booking_id', '!=', $ignoreBookingId))
+                    ->lockForUpdate()
+                    ->count(DB::raw('1'));
 
-            if ($booked >= (int) $cap->capacity) {
-                throw new ConflictHttpException("No spaces available on {$dateStr}");
+                if ($booked >= (int) $cap->capacity) {
+                    throw new ConflictHttpException("No spaces available on {$dateStr}");
+                }
             }
-        }
+        });
     }
 }

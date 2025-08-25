@@ -2,9 +2,9 @@
 
 namespace Tests\Feature\Api;
 
-use Tests\TestCase;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
 
 class BookingEndpointTest extends TestCase
 {
@@ -49,17 +49,19 @@ class BookingEndpointTest extends TestCase
     }
 
     #[Test]
-    public function it_prevents_duplicate_active_booking_for_same_user_and_same_car(): void
+    public function it_prevents_overlapping_active_booking_for_same_vehicle(): void
     {
+        // First booking: 2025-08-22 → 2025-08-23T09:30:00
         $this->postJson('/api/v1/bookings', $this->validPayload())->assertCreated();
 
+        // Second booking starts 2025-08-23 00:00, which OVERLAPS the first (ends 09:30)
         $this->postJson('/api/v1/bookings', $this->validPayload([
-            'from_date'   => '2025-08-24',
-            'to_datetime' => '2025-08-25T09:00:00',
+            'from_date'   => '2025-08-23',              // 00:00 on same day => overlap
+            'to_datetime' => '2025-08-24T09:00:00',
         ]))
             ->assertStatus(409)
             ->assertJsonFragment([
-                'message' => 'You already have an active booking for this vehicle. Choose a different vehicle or cancel the existing one.',
+                'message' => 'This vehicle already has an active booking that overlaps with these dates. Choose a different vehicle or cancel the existing one.',
             ]);
     }
 
@@ -173,9 +175,8 @@ class BookingEndpointTest extends TestCase
             'to_datetime'    => '2025-08-23T09:30:00',
         ];
 
-        $first = $this->postJson('/api/v1/bookings', $payload)
-            ->assertCreated()
-            ->json();
+        $this->postJson('/api/v1/bookings', $payload)
+            ->assertCreated();
 
         // Simulate double-click with identical payload
         $this->postJson('/api/v1/bookings', $payload)
@@ -206,5 +207,4 @@ class BookingEndpointTest extends TestCase
         $this->postJson('/api/v1/bookings', $payload)
             ->assertCreated();
     }
-
 }

@@ -2,9 +2,10 @@
 
 namespace App\Rules;
 
-use Closure;
 use Carbon\CarbonImmutable;
+use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
+use Throwable;
 
 class MaxStayDays implements ValidationRule
 {
@@ -13,9 +14,18 @@ class MaxStayDays implements ValidationRule
         private readonly ?int $maxDays = null
     ) {}
 
+    /**
+     * Validate that the number of occupied days does not exceed the configured maximum.
+     *
+     * @param  string  $attribute
+     * @param  mixed   $value
+     * @param  Closure $fail
+     */
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {
         $from = request()->input($this->fromField);
+
+        // Skip validation if required fields are missing
         if (!$from || !$value) {
             return;
         }
@@ -23,7 +33,8 @@ class MaxStayDays implements ValidationRule
         try {
             $start = CarbonImmutable::parse($from)->startOfDay();
             $end   = CarbonImmutable::parse($value);
-        } catch (\Throwable) {
+        } catch (Throwable) {
+            // If parsing fails, let other validators handle invalid dates
             return;
         }
 

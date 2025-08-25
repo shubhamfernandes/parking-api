@@ -10,8 +10,10 @@ use App\Http\Resources\AvailabilityResource;
 
 class AvailabilityController extends Controller
 {
-    public function calendar(QuoteAvailabilityRequest $request, AvailabilityServiceInterface $availability)
-    {
+    public function calendar(
+        QuoteAvailabilityRequest $request,
+        AvailabilityServiceInterface $availability
+    ): AvailabilityResource {
         $range = new DateRange(
             fromDate:   $request->date('from_date')->toImmutable()->startOfDay(),
             toDateTime: $request->date('to_datetime')->toImmutable()
@@ -20,8 +22,8 @@ class AvailabilityController extends Controller
         $calendar = $availability->calendar($range);
         $allAvailable = $calendar->every(fn ($d) => $d['available'] > 0);
 
-            return new AvailabilityResource([
-            'range' => $request->only('from_date','to_datetime'),
+        return new AvailabilityResource([
+            'range' => $request->only('from_date', 'to_datetime'),
             'all_days_have_space' => $allAvailable,
             'per_day' => $calendar,
         ]);

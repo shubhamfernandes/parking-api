@@ -2,11 +2,11 @@
 
 namespace Tests\Feature\Api;
 
-use Tests\TestCase;
+use App\Domain\Services\PricingService;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
-use Carbon\Carbon;
-use App\Domain\Services\PricingService;
+use Tests\TestCase;
 
 class PricingEndpointTest extends TestCase
 {
@@ -16,8 +16,6 @@ class PricingEndpointTest extends TestCase
     {
         parent::setUp();
 
-        // Freeze time so any "today" rules are deterministic
-        Carbon::setTestNow('2025-08-21 09:00:00');
 
         // Ensure config matches what PricingService expects
         config()->set('pricing.currency', 'GBP');
@@ -25,8 +23,8 @@ class PricingEndpointTest extends TestCase
             'summer' => ['weekday' => 1500, 'weekend' => 2000],
             'winter' => ['weekday' => 1200, 'weekend' => 1600],
         ]);
-        config()->set('pricing.summer_months', [6,7,8]);
-        config()->set('pricing.winter_months', [12,1,2]);
+        config()->set('pricing.summer_months', [6, 7, 8]);
+        config()->set('pricing.winter_months', [12, 1, 2]);
 
         // Bind the service so the container resolves constructor args
         $this->app->bind(PricingService::class, function () {
@@ -72,7 +70,7 @@ class PricingEndpointTest extends TestCase
         $this->assertSame('GBP 30.00', $resp['total']);
 
         $dates = collect($resp['breakdown'])->pluck('date')->all();
-        $this->assertSame(['2025-08-26','2025-08-27'], $dates);
+        $this->assertSame(['2025-08-26', '2025-08-27'], $dates);
 
         foreach ($resp['breakdown'] as $row) {
             $this->assertSame('summer', $row['season']);
@@ -120,29 +118,29 @@ class PricingEndpointTest extends TestCase
         );
     }
 
-   #[Test]
-public function it_prices_winter_weekdays_correctly(): void
-{
-    // Tue–Thu in January (winter); occupied: 14,15
-    $resp = $this->getJson('/api/v1/price?from_date=2026-01-14&to_datetime=2026-01-16T10:00:00')
-        ->assertOk()
-        ->json();
+    #[Test]
+    public function it_prices_winter_weekdays_correctly(): void
+    {
+        // Tue–Thu in January (winter); occupied: 14,15
+        $resp = $this->getJson('/api/v1/price?from_date=2026-01-14&to_datetime=2026-01-16T10:00:00')
+            ->assertOk()
+            ->json();
 
-    // 2 * 1200 = 2400
-    $this->assertSame(2400, $resp['total_minor']);
-    $this->assertSame('GBP 24.00', $resp['total']);
+        // 2 * 1200 = 2400
+        $this->assertSame(2400, $resp['total_minor']);
+        $this->assertSame('GBP 24.00', $resp['total']);
 
-    foreach ($resp['breakdown'] as $row) {
-        $this->assertSame('winter', $row['season']);
-        $this->assertSame('weekday', $row['day_type']);
-        $this->assertSame(1200, $row['amount_minor']);
+        foreach ($resp['breakdown'] as $row) {
+            $this->assertSame('winter', $row['season']);
+            $this->assertSame('weekday', $row['day_type']);
+            $this->assertSame(1200, $row['amount_minor']);
+        }
+
+        $this->assertSame(
+            $resp['total_minor'],
+            collect($resp['breakdown'])->sum('amount_minor')
+        );
     }
-
-    $this->assertSame(
-        $resp['total_minor'],
-        collect($resp['breakdown'])->sum('amount_minor')
-    );
-}
 
     #[Test]
     public function it_mixes_summer_and_winter_across_season_boundary(): void

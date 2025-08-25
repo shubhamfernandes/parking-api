@@ -2,10 +2,10 @@
 
 namespace Tests\Feature\Api;
 
-use Tests\TestCase;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use App\Models\Capacity;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
 
 class BookingCapacityTest extends TestCase
 {
@@ -42,7 +42,7 @@ class BookingCapacityTest extends TestCase
             'customer_email' => 'two@example.com',
             'vehicle_reg'    => 'BB22 BBB',
         ]))
-            ->assertStatus(409) // if your handler maps to 409; change if you use 422
+            ->assertStatus(409) // adjust if your exception handler maps to a different status
             ->assertJsonFragment(['message' => 'No spaces available on 2025-08-22']);
 
         // Cancel the first → frees 1 slot

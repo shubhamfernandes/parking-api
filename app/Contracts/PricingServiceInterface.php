@@ -3,17 +3,22 @@
 namespace App\Contracts;
 
 use App\Domain\ValueObjects\DateRange;
+use Brick\Money\Money;
+
 
 /**
  * Contract for quoting price over a date range.
- * Return shape is stable and used by PriceQuoteResource.
+ * The return shape is stable and consumed by PriceQuoteResource.
  */
 interface PricingServiceInterface
 {
     /**
+     * Quote a price for the given date range.
+     *
+     * @param  DateRange $range
      * @return array{
      *   currency: string,
-     *   total: \Brick\Money\Money,
+     *   total: Money,
      *   breakdown: array<int, array{
      *     date: string,
      *     season: string,

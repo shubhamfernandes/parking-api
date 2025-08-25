@@ -2,10 +2,10 @@
 
 namespace Tests\Feature\Api;
 
-use Tests\TestCase;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
-use Carbon\Carbon;
+use Tests\TestCase;
 
 class BookingValidationTest extends TestCase
 {
@@ -14,7 +14,8 @@ class BookingValidationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        // Freeze "today" so rules like after_or_equal:today are deterministic
+
+        // Freeze "today" so rules like after_or_equal:today behave deterministically
         Carbon::setTestNow('2025-08-21 09:00:00');
     }
 
@@ -43,7 +44,7 @@ class BookingValidationTest extends TestCase
     {
         $this->postJson('/api/v1/bookings', array_merge($this->base(), [
             'from_date'   => '2025-08-22',
-            'to_datetime' => '2025-08-21T09:00:00', // before
+            'to_datetime' => '2025-08-21T09:00:00', // before from_date
         ]))
             ->assertStatus(422)
             ->assertJsonValidationErrors(['to_datetime']);
@@ -52,7 +53,7 @@ class BookingValidationTest extends TestCase
     #[Test]
     public function update_rejects_to_before_from(): void
     {
-        // Create a valid booking
+        // Create a valid booking first
         $created = $this->postJson('/api/v1/bookings', array_merge($this->base(), [
             'from_date'   => '2025-08-22',
             'to_datetime' => '2025-08-23T09:00:00',
@@ -60,7 +61,7 @@ class BookingValidationTest extends TestCase
             ->assertCreated()
             ->json();
 
-        // Try to amend with invalid range (still include required fields)
+        // Attempt to amend with invalid date range (include required fields)
         $this->putJson("/api/v1/bookings/{$created['id']}", array_merge($this->base(), [
             'from_date'   => '2025-08-22',
             'to_datetime' => '2025-08-21T09:00:00',

@@ -2,13 +2,13 @@
 
 namespace Tests\Feature\Api;
 
-use Tests\TestCase;
 use App\Models\Booking;
 use App\Models\BookingDay;
 use App\Models\Capacity;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
 
 class AvailabilityEndpointTest extends TestCase
 {
@@ -39,7 +39,7 @@ class AvailabilityEndpointTest extends TestCase
             ->assertOk()
             ->assertJsonStructure([
                 'range'  => ['from_date', 'to_datetime'],
-                'per_day'=> [['date', 'capacity', 'booked', 'available']]
+                'per_day'=> [['date', 'capacity', 'booked', 'available']],
             ])
             ->json();
 
@@ -213,35 +213,34 @@ class AvailabilityEndpointTest extends TestCase
         $this->assertSame(10, $perDay['2025-08-23']['available']);
     }
 
+    #[Test]
+    public function all_days_have_space_is_true_when_every_day_has_capacity(): void
+    {
+        $resp = $this->getJson('/api/v1/availability?from_date=2025-08-22&to_datetime=2025-08-24T09:00:00')
+            ->assertOk()
+            ->json();
+
+        $this->assertTrue((bool) $resp['all_days_have_space']);
+    }
 
     #[Test]
-public function all_days_have_space_is_true_when_every_day_has_capacity(): void
-{
-    $resp = $this->getJson('/api/v1/availability?from_date=2025-08-22&to_datetime=2025-08-24T09:00:00')
-        ->assertOk()
-        ->json();
+    public function all_days_have_space_is_false_when_any_day_is_full(): void
+    {
+        // Cap = 1 and one booking on 2025-08-22 makes that day full
+        \App\Models\Capacity::factory()->create(['day' => '2025-08-22', 'capacity' => 1]);
 
-    $this->assertTrue((bool) $resp['all_days_have_space']);
-}
+        $this->postJson('/api/v1/bookings', [
+            'customer_name'  => 'Full Day',
+            'customer_email' => 'full@example.com',
+            'vehicle_reg'    => 'FD11 FULL',
+            'from_date'      => '2025-08-22',
+            'to_datetime'    => '2025-08-23T09:00:00',
+        ])->assertCreated();
 
-#[Test]
-public function all_days_have_space_is_false_when_any_day_is_full(): void
-{
-    // Cap = 1 and one booking on 2025-08-22 makes that day full
-    \App\Models\Capacity::factory()->create(['day' => '2025-08-22', 'capacity' => 1]);
+        $resp = $this->getJson('/api/v1/availability?from_date=2025-08-22&to_datetime=2025-08-24T09:00:00')
+            ->assertOk()
+            ->json();
 
-    $this->postJson('/api/v1/bookings', [
-        'customer_name'  => 'Full Day',
-        'customer_email' => 'full@example.com',
-        'vehicle_reg'    => 'FD11 FULL',
-        'from_date'      => '2025-08-22',
-        'to_datetime'    => '2025-08-23T09:00:00',
-    ])->assertCreated();
-
-    $resp = $this->getJson('/api/v1/availability?from_date=2025-08-22&to_datetime=2025-08-24T09:00:00')
-        ->assertOk()
-        ->json();
-
-    $this->assertFalse((bool) $resp['all_days_have_space']);
-}
+        $this->assertFalse((bool) $resp['all_days_have_space']);
+    }
 }

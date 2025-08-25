@@ -4,21 +4,19 @@ A small, production-quality REST API for an airport parking service. It exposes 
 
 ---
 
-
 ## Overview
 
 - **Availability**: For any `from_date` (drop-off date) to `to_datetime` (pick-up datetime), the API returns per‑day capacity, booked count and remaining spaces. The checkout day is **excluded** (interval is **[from, to)**).
 - **Pricing**: Price is computed per occupied day using a fixed matrix of **season** (summer/winter) × **day type** (weekday/weekend). Totals are returned as **integers in minor units** and as a `Brick\Money\Money` string.
 - **Bookings**: Create validates capacity & price atomically; Amend re-checks capacity & re-prices; Cancel frees capacity and clears the idempotency fingerprint.
-- **Safety**: Idempotent create via a fingerprint; pessimistic row locks to prevent race conditions when days fill up; ULIDs for IDs; immutable dates throughout.
+- **Safety**: Idempotent create via a fingerprint; pessimistic row locks to prevent race conditions; ULIDs for IDs; immutable dates throughout.
 
 ---
 
-
 ## Money & Currency
 
-- Uses **[brick/money]** to avoid floating-point errors.
-- All arithmetic is done in **minor units** (e.g., pence). `total_minor` is stored as integer.
+- Uses **brick/money** to avoid floating-point errors.
+- Arithmetic is done in **minor units** (e.g., pence). `total_minor` is stored as an integer.
 - API exposes both:
   - `total_minor` *(int)*
   - `total` *(string)*, e.g. `"GBP 35.00"`
@@ -28,22 +26,21 @@ A small, production-quality REST API for an airport parking service. It exposes 
 
 ## Seasons, Rates & Default Season
 
-- **Rates** are defined per season & day type:
-  - Summer: `weekday=1500`, `weekend=2000` (minor units)
+- **Rates** (minor units):
+  - Summer: `weekday=1500`, `weekend=2000`
   - Winter: `weekday=1200`, `weekend=1600`
-- **Month mapping** (1..12):
+- **Month mapping**:
   - `summer_months = [6, 7, 8]`
   - `winter_months = [12, 1, 2]`
-- **Default season** for months not listed (Mar–May, Sep–Nov) is **winter** by design.
-  This is documented and can be extended later (e.g., adding a “standard” band).
-  (config.pricing,config.parking)
+- **Default season** for other months (Mar–May, Sep–Nov) is **winter** (explicit; extendable).
+
 ---
 
 ## Capacity & Availability
 
-- Default capacity per day is `parking.capacity` (env `PARKING_CAPACITY`, default 10).
+- Default capacity per day is `parking.capacity` (env `PARKING_CAPACITY`, default **10**).
 - A `capacities` row (if present) overrides the default for that specific calendar day.
-- `AvailabilityService::calendar(range)` returns a collection of:
+- `AvailabilityService::calendar(range)` returns:
   ```json
   {
     "date": "YYYY-MM-DD",
@@ -53,17 +50,18 @@ A small, production-quality REST API for an airport parking service. It exposes 
   }
   ```
 - Occupancy counts **only active** bookings.
-- The **checkout day is excluded**: the interval is `[from_date, to_datetime)`.
+- The **checkout day is excluded**: `[from_date, to_datetime)`.
 
 ---
 
-## Booking Lifecycle
+## Booking lifecycle
 
 ### Create
 - Validates request (dates, max stay, etc.).
 - Builds a `DateRange` (immutable) and computes:
-  - **Idempotency fingerprint** from `email + normalized vehicle reg + from + to`. If a booking with the same fingerprint exists, returns **409**.
-  - **Duplicate-active rule**: same user + same car cannot have another **active** booking.
+  - **Idempotency fingerprint** from `email + normalized vehicle reg + from + to`.  
+    If a booking with the same fingerprint exists **and is active** → **409**.
+  - **Duplicate/overlap rule (vehicle-only)**: if the **same vehicle** already has an **active** booking that **overlaps** `[from, to)`, reject with **409**.
 - In a **transaction**:
   - `AvailabilityService::assertRangeHasSpace(range)` with row locks.
   - `PricingService::quote(range)` for totals.
@@ -71,33 +69,49 @@ A small, production-quality REST API for an airport parking service. It exposes 
   - Create `booking_days` rows for each occupied day.
 
 ### Amend
-- Builds new `DateRange`, re-checks capacity (ignoring the current booking’s own days), re‑prices, bumps `version`, and re-syncs `booking_days`.
-
+- Rebuilds a `DateRange`, **re-checks capacity** (ignoring the current booking’s days), blocks **overlap** with any *other* active booking of the **same vehicle**, **re-prices**, **increments `version`**, and re-syncs `booking_days`.
+- Controllers/services return a **fresh** model so responses reflect updated values.
 
 ### Cancel
 - If already cancelled → **422**.
-- Otherwise: set `status=cancelled`, **clear `request_fingerprint`** so the exact same payload can be used to re-create later. Cascade deletes do **not** remove the booking; it remains as a cancelled record.
+- Otherwise sets `status=cancelled` and **clears `request_fingerprint`** so the exact same payload can be reused later.
+
+---
+
+## Booking rules & restrictions (what users **cannot** do)
+
+- **Double-book the same vehicle on overlapping dates** → **409**  
+  (Overlap is true when `existing.from_date < new.to_datetime` **and** `existing.to_datetime > new.from_date`.)
+- **Submit the exact same booking payload twice while it’s still active** → **409**  
+  (Idempotency fingerprint blocks duplicate create. After **cancel**, the same payload is allowed again because the fingerprint is cleared.)
+- **Amend to overlapping dates for the same vehicle** → **409**.
+- **Amend a cancelled booking** → **422** (“Cannot amend a cancelled booking.”).
+- **Cancel a booking twice** → **422** (“This booking is already cancelled.”).
+- **Book past dates / inverted ranges / exceed max-stay** → **422** via validation.
+- **Bypass capacity** → **409** (“No spaces available on YYYY-MM-DD”).
+
+> **Note:** The **overlap rule is vehicle-only** (email is ignored). Email is normalized for storage and used in the **idempotency** fingerprint.
 
 ---
 
 ## Idempotency, Concurrency & Locking
 
-- **Idempotency**: unique `request_fingerprint` column ensures duplicate payloads are rejected (**409**), even under race conditions.
-- **Pessimistic locking**: `assertRangeHasSpace` creates/locks the `capacities` row for each day and locks `booking_days` rows during counting to serialize writers safely.
-- **Lock order**: days are sorted to reduce deadlocks when multiple days are touched.
+- **Idempotency**: unique `request_fingerprint` guards retries/double-clicks (→ **409** when active).
+- **Pessimistic locking**: `assertRangeHasSpace` locks the capacity row and the relevant `booking_days` while counting.
+- **Lock order**: days are sorted to minimize deadlocks.
 
 ---
 
 ## Validation Rules
 
-- Request validation via `FormRequest`s:
-  - `QuoteAvailabilityRequest`: shared by **availability** and **pricing** endpoints.
+- Via `FormRequest`s:
+  - `QuoteAvailabilityRequest` for availability & pricing:
     - `from_date` required, date, **today or future**
-    - `to_datetime` required, date, **after from_date**, within the next year
-  - `BookingUpdateRequest` (for amend) uses the same date rules and the custom rule below.
-- Custom rule: **`MaxStayDays`**
-  - Computes nights as the number of days in `[from, to)`.
-  - Fails if `nights > parking.max_stay_days` (env `PARKING_MAX_STAY_DAYS`, default 10).
+    - `to_datetime` required, date, **after from_date**, within next year
+  - `BookingStoreRequest` / `BookingUpdateRequest` for create/amend (same date rules) + **MaxStayDays**.
+- Custom **`MaxStayDays`** rule:
+  - Nights are the number of days in `[from, to)`.
+  - Fails if `nights > parking.max_stay_days` (env `PARKING_MAX_STAY_DAYS`, default **10**).
 
 ---
 
@@ -105,41 +119,26 @@ A small, production-quality REST API for an airport parking service. It exposes 
 
 - **`config/pricing.php`**
   - `currency` (env `PRICING_CURRENCY`, default `GBP`)
-  - `rates` matrix for summer/winter × weekday/weekend (minor units)
+  - summer/winter weekday/weekend `rates` (minor units)
   - `summer_months`, `winter_months`
 - **`config/parking.php`**
   - `capacity` (env `PARKING_CAPACITY`, default `10`)
   - `max_stay_days` (env `PARKING_MAX_STAY_DAYS`, default `10`)
 
-
 ---
 
-## Service Architecture (Interfaces & Implementations)
+## Service architecture
 
-- **Contracts (interfaces)** define stable shapes and make services swappable in tests:
+- **Contracts** define stable shapes:
   - `PricingServiceInterface::quote(DateRange): array`
-  - `AvailabilityServiceInterface::calendar(DateRange): Collection` and `assertRangeHasSpace(DateRange, ?ignoreId)`
-  - `BookingServiceInterface` (`create`, `amend`, `cancel`)
-
-- **Concrete services**
-  - `PricingService`: pure function from `DateRange` → items + total (uses rates + season map).
-  - `AvailabilityService`: reads capacity overrides & booked counts; enforces space with row locks.
-  - `BookingService`: orchestrates the lifecycle inside transactions.
-
-- **Bindings (`AppServiceProvider`)**
-  - Binds interfaces to singletons; normalizes config; injects dependencies.
-
-### Value Objects
-
-- `DateRange (final readonly)`
-  - `fromDate: CarbonImmutable (00:00)` and `toDateTime: CarbonImmutable`
-  - Generator `eachOccupiedDay()` yields **date strings** for every day in `[from, to)`.
-
-### Resources (API serializers)
-
-- `AvailabilityResource` → `range`, `all_days_have_space`, `per_day[]`
-- `PriceQuoteResource` → `currency`, `total_minor`, `total`, `breakdown[]`
-- `BookingResource` → booking fields, totals, and optional `days[]` if relation loaded
+  - `AvailabilityServiceInterface::calendar(DateRange): Collection`, `assertRangeHasSpace(DateRange, ?ignoreId)`
+  - `BookingServiceInterface` → `create`, `amend`, `cancel`
+- **Concrete services**:
+  - `PricingService`: pure function from `DateRange` → items + total.
+  - `AvailabilityService`: capacity overrides, booked counts, locking.
+  - `BookingService`: orchestrates lifecycle, idempotency, overlap rules.
+- **Value object**: `DateRange (final readonly)` with generator `eachOccupiedDay()` over `[from, to)`.
+- **Resources**: `AvailabilityResource`, `PriceQuoteResource`, `BookingResource`.
 
 ---
 
@@ -148,76 +147,60 @@ A small, production-quality REST API for an airport parking service. It exposes 
 All routes are prefixed with `/api/v1`.
 
 ### GET `/availability`
-**Query:** `from_date=YYYY-MM-DD`, `to_datetime=YYYY-MM-DDTHH:MM:SS`  
-**Response:**
-```json
-{
-  "range": { "from_date": "...", "to_datetime": "..." },
-  "all_days_have_space": true,
-  "per_day": [
-    { "date": "2025-08-22", "capacity": 10, "booked": 2, "available": 8 }
-  ]
-}
-```
+Query: `from_date=YYYY-MM-DD`, `to_datetime=YYYY-MM-DDTHH:MM:SS`  
+Returns per-day capacity & counts.
 
 ### GET `/price`
-**Query:** `from_date`, `to_datetime`  
-**Response:**
-```json
-{
-  "currency": "GBP",
-  "total_minor": 3500,
-  "total": "GBP 35.00",
-  "breakdown": [
-    { "date": "2025-08-22", "season": "summer", "day_type": "weekday", "amount_minor": 1500 }
-  ]
-}
-```
+Query: `from_date`, `to_datetime`  
+Returns total and per-day breakdown.
 
 ### POST `/bookings`
-**Body:**
+Body:
 ```json
 {
-  "customer_name": "Alex",
-  "customer_email": "alex@example.com",
-  "vehicle_reg": "AB12 CDE",
-  "from_date": "2025-08-22",
-  "to_datetime": "2025-08-23T09:00:00"
+    "id": "01k3h521rdn26z8ha0vc2g2gk2",
+    "reference": "BK-01K3H521RDN26Z8HA0VC2G2GK3",
+    "status": "active",
+    "customer_name": "Alex Dow",
+    "customer_email": "alex+1756033996242@example.com",
+    "vehicle_reg": "QA6242 ABC",
+    "from_date": "2025-08-27",
+    "to_datetime": "2025-08-30T09:00:00+00:00",
+    "total_minor": 4500,
+    "total": "GBP 45.00",
+    "currency": "GBP",
+    "created_at": "2025-08-25T17:40:17+00:00",
+    "updated_at": "2025-08-25T17:40:17+00:00"
 }
 ```
-**Responses:**
-- **201**: booking resource
-- **409**: duplicate active booking for same user+car, or idempotent re‑submit. cancel a canceled booking
-- **422**: validation error,amend a cancelled booking
+Responses:
+- **201** created
+- **409** duplicate/overlap or same-payload idempotency
+- **409** capacity full on at least one day
+- **422** validation errors
 
-### GET `/bookings/{id}` → booking resource
+### GET `/bookings/{id}`  
+Returns a booking resource.
 
-### PUT `/bookings/{id}` → amend (re-check capacity, re-price, bump version)
+### PUT `/bookings/{id}`  
+Amend (re-check capacity, re-price, **bumps `version`**).  
+**422** if the booking is cancelled. **409** if the change would overlap another active booking of the same vehicle or capacity is full.
 
-### DELETE `/bookings/{id}` → cancel (non‑idempotent; 422 if already cancelled)
-
----
-
-## Testing & Postman
-
-- **PHPUnit**: feature & unit tests cover availability math, pricing, lifecycle, idempotency, max-stay, and DST sanity.
-
-
-
-
-## Design Decisions & Assumptions
-
-- **Interval** is `[from, to)`: checkout day excluded everywhere (availability & pricing) for consistency.
-- **Default season for shoulder months** is **winter** (explicit, documented).
-- **Idempotency** guards client retries and double-clicks.
-- **ULIDs** for compact, sortable IDs.
-- **Immutable time** (`CarbonImmutable`) to avoid accidental mutation bugs.
-- **Validation**: max stay applies to create, amend, and quote (recommended).
-- **Normalization**: emails lowercased/trimmed; vehicle regs uppercased with spaces collapsed; a normalized field is used for fast lookups.
+### DELETE `/bookings/{id}`  
+Cancel. **422** if already cancelled. Clears fingerprint so the same payload can be re-booked later.
 
 ---
 
+## Testing
 
+- PHPUnit covers availability, pricing, lifecycle (create/amend/cancel), idempotency, max-stay, and DST sanity.
+- Tests freeze time to `2025-08-21T09:00:00 Europe/London` for deterministic “today”/offsets.
+
+---
+
+## Getting started
+
+```bash
 # Clone or unpack the repository
 git clone <repo-url> parking-api
 cd parking-api
@@ -235,9 +218,8 @@ docker compose run --rm app composer install --no-interaction
 docker compose run --rm app php artisan key:generate
 
 # 5. Database setup
-docker compose run --rm app php artisan migrate 
-
+docker compose run --rm app php artisan migrate
 
 # Enter the container
 docker compose exec app bash
-
+```

@@ -227,4 +227,8 @@ docker compose run --rm app php artisan migrate
 
 # Enter the container
 docker compose exec app bash
+
+(Make sure docker app & Db are running)
+# Run Tests
+php artisan test
 ```

@@ -145,13 +145,15 @@ A small, production-quality REST API for an airport parking service. It exposes 
 ## HTTP API
 
 All routes are prefixed with `/api/v1`.
-(http://127.0.0.1:8000/api/v1/)
+Base URL : [(http://127.0.0.1:8000/api/v1/)](http://127.0.0.1:8000/api/v1)
 ### GET `/availability`
 Query: `from_date=YYYY-MM-DD`, `to_datetime=YYYY-MM-DDTHH:MM:SS`  
+http://127.0.0.1:8000/api/v1/availability?from_date=2025-08-22&to_datetime=2025-08-23T09:00:00
 Returns per-day capacity & counts.
 
 ### GET `/price`
 Query: `from_date`, `to_datetime`  
+http://127.0.0.1:8000/api/v1/price?from_date=2025-08-27&to_datetime=2025-08-30T09:00:00
 Returns total and per-day breakdown.
 
 ### POST `/bookings`
@@ -180,13 +182,16 @@ Responses:
 - **422** validation errors
 
 ### GET `/bookings/{id}`  
+http://127.0.0.1:8000/api/v1/bookings/{id}
 Returns a booking resource.
 
 ### PUT `/bookings/{id}`  
 Amend (re-check capacity, re-price, **bumps `version`**).  
+PATCH /api/v1/bookings/{id}
 **422** if the booking is cancelled. **409** if the change would overlap another active booking of the same vehicle or capacity is full.
 
 ### DELETE `/bookings/{id}`  
+DELETE /api/v1/bookings/{id}
 Cancel. **422** if already cancelled. Clears fingerprint so the same payload can be re-booked later.
 
 ---
